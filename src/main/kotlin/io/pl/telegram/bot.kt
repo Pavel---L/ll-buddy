@@ -15,7 +15,7 @@ private val logger = LoggerFactory.getLogger("TelegramBot")
 fun startTelegramBot() {
     // Получите токен из переменной окружения или конфигурационного файла
     // val botToken = System.getenv("TELEGRAM_BOT_TOKEN") ?: error("TELEGRAM_BOT_TOKEN не задан")
-    val botToken = "8016863707:AAGG0_f1oIv3pLFClXpgxiTrjeP4kMyGT20"
+    val botToken = ""
 
     logger.info("Starting Telegram Bot...")
 
