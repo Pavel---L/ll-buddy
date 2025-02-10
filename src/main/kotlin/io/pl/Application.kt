@@ -2,7 +2,6 @@ package io.pl
 
 import io.github.cdimascio.dotenv.Dotenv
 import io.ktor.client.*
-import io.ktor.client.call.*
 import io.ktor.client.plugins.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.plugins.logging.*
@@ -11,6 +10,7 @@ import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.application.*
+import io.ktor.server.config.*
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*
 import io.ktor.server.plugins.calllogging.*
@@ -19,23 +19,18 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.pl.telegram.BotController
 import io.pl.telegram.BotOrchestrator
+import io.pl.telegram.OpenAIService
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import org.slf4j.event.Level
 import java.lang.invoke.MethodHandles
-import io.github.cdimascio.dotenv.dotenv
+import java.util.concurrent.atomic.AtomicReference
 
 
 private val logger = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass())
 
-// Global bot scope
-private val botScope = CoroutineScope(Dispatchers.IO)
-private val dotenv = Dotenv.load()
-private val botOrchestrator: BotController = BotOrchestrator(
-    dotenv["TELEGRAM_BOT_LLBUDDY_TOKEN"] ?: throw IllegalStateException("TELEGRAM_BOT_TOKEN is not set"),
-    botScope
-)
+private val dotenv = Dotenv.configure().ignoreIfMissing().load()
 
 // Global Ktor HttpClient instance
 private val httpClient = HttpClient {
@@ -47,11 +42,16 @@ private val httpClient = HttpClient {
         level = LogLevel.INFO
     }
     install(HttpTimeout) {
-        requestTimeoutMillis = 5000
-        connectTimeoutMillis = 5000
-        socketTimeoutMillis = 5000
+        requestTimeoutMillis = 60000
+        connectTimeoutMillis = 60000
+        socketTimeoutMillis = 60000
     }
 }
+
+
+// Global bot scope
+private val botScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+private val botControllerRef:AtomicReference<BotController?> = AtomicReference<BotController?>();
 
 suspend fun stopBotIfRunning() {
     try {
@@ -86,8 +86,6 @@ fun main() = runBlocking {
         }
     })
 
-    botOrchestrator.startBot()
-
     val port = System.getenv("PORT")?.toIntOrNull() ?: 8080
     logger.info("Starting Ktor server on port $port")
     val server = embeddedServer(Netty, port = port, module = Application::module)
@@ -95,8 +93,25 @@ fun main() = runBlocking {
         server.start(wait = false)
     }
 
+    val openAIService = OpenAIService(
+        httpClient,
+        dotenv["OPEN_AI_API_TOKEN"] ?: throw IllegalStateException("OPENAI_API_KEY is not set"),
+        ApplicationConfig("application.conf").config("ktor.prompts")
+    )
+
+    val botOrchestrator: BotController = BotOrchestrator(
+        dotenv["TELEGRAM_BOT_LLBUDDY_TOKEN"] ?: throw IllegalStateException("TELEGRAM_BOT_TOKEN is not set"),
+        dotenv["TELEGRAM_BOT_LLBUDDY_WHITELIST"]?.split(",")?.mapNotNull { it.trim().toLongOrNull() }?.toSet()
+            ?: throw IllegalStateException("TELEGRAM_BOT_TOKEN_WHITELIST is not set"),
+        openAIService,
+        botScope
+    )
+    botControllerRef.set(botOrchestrator)
+    botOrchestrator.startBot()
+
     logger.info("Ktor server started; waiting for jobs to complete...")
     serverJob.join()
+    Thread.currentThread().join()
 
     // Clean up HttpClient when the application stops
     httpClient.close()
@@ -120,7 +135,7 @@ fun Application.module() {
 
             // curl -X POST http://localhost:8080/api/bot/start
             post("/bot/start") {
-                val started = botOrchestrator.startBot()
+                val started = botControllerRef.get()!!.startBot()
                 if (started) {
                     logger.info("Bot started successfully.")
                     call.respondText("Bot started successfully.")
@@ -132,7 +147,7 @@ fun Application.module() {
 
             // curl -X POST http://localhost:8080/api/bot/stop
             post("/bot/stop") {
-                val stopped = botOrchestrator.stopBot()
+                val stopped = botControllerRef.get()!!.stopBot()
                 if (stopped) {
                     logger.info("Bot stopped successfully.")
                     call.respondText("Bot stopped successfully.")
@@ -155,4 +170,5 @@ fun Application.logStartupInfo(environment: ApplicationEnvironment) {
     log.info("Kotlin: {}", kotlinVersion)
     log.info("Ktor: {}", ktorVersion)
     log.info("Timestamp: {}", System.currentTimeMillis())
+    log.info("environment: {}", ApplicationConfig("application.conf").keys())
 }

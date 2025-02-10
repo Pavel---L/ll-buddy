@@ -7,6 +7,8 @@ import java.util.concurrent.atomic.AtomicReference
 
 class BotOrchestrator(
     private val botToken: String,
+    private val allowedUsers: Set<Long>,
+    private val openAIService: OpenAIService,
     private val botScope: CoroutineScope
 ) : BotController {
     private val botJob = AtomicReference<Job?>(null)
@@ -21,7 +23,7 @@ class BotOrchestrator(
         }
 
         val newJob = botScope.launch {
-            startTelegramBot(botToken)
+            startTelegramBot(botToken, allowedUsers, openAIService, botScope)
         }
 
         // Atomically set botJob only if it was null
@@ -38,7 +40,7 @@ class BotOrchestrator(
         val currentJob = botJob.get() ?: return false // Bot is not running
 
         return botJob.compareAndSet(currentJob, null).also { stopped ->
-            if (stopped) currentJob.cancel() // Only cancel if we actually stopped it
+            //if (stopped) currentJob.cancel() // Only cancel if we actually stopped it
         }
     }
 }

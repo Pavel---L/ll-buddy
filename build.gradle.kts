@@ -57,6 +57,13 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
     }
 }
 
+tasks.processResources {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from("src/main/resources") {
+        include("**/*.conf", "**/*.properties", "**/*.yaml")
+    }
+}
+
 // Указываем точку входа в приложение
 application {
     mainClass.set("io.pl.ApplicationKt") // Имя файла с main-функцией
@@ -67,5 +74,16 @@ tasks.jar {
         attributes["Main-Class"] = "io.pl.ApplicationKt"
     }
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-    from({ configurations.runtimeClasspath.get().filter { it.name.endsWith("jar") }.map { zipTree(it) } })
+
+    from({
+        configurations.runtimeClasspath.get()
+            .filter { it.name.endsWith("jar") }
+            .map { zipTree(it) }
+    })
+
+    // Explicitly copy configuration files into META-INF/resources
+    from("src/main/resources") {
+        include("**/*.conf", "**/*.properties", "**/*.yaml")
+        into("META-INF/resources")
+    }
 }
