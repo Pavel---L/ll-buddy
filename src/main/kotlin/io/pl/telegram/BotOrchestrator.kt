@@ -1,11 +1,14 @@
 package io.pl.telegram
 
-import kotlinx.coroutines.*
-import org.slf4j.LoggerFactory
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicReference
 
-class BotOrchestrator(private val botScope: CoroutineScope) : BotController {
-    private val logger = LoggerFactory.getLogger("BotOrchestrator")
+class BotOrchestrator(
+    private val botToken: String,
+    private val botScope: CoroutineScope
+) : BotController {
     private val botJob = AtomicReference<Job?>(null)
 
     /**
@@ -18,7 +21,7 @@ class BotOrchestrator(private val botScope: CoroutineScope) : BotController {
         }
 
         val newJob = botScope.launch {
-            startTelegramBot()
+            startTelegramBot(botToken)
         }
 
         // Atomically set botJob only if it was null

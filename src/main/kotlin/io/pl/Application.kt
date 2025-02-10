@@ -1,5 +1,15 @@
 package io.pl
 
+import io.github.cdimascio.dotenv.Dotenv
+import io.ktor.client.*
+import io.ktor.client.call.*
+import io.ktor.client.plugins.*
+import io.ktor.client.plugins.contentnegotiation.*
+import io.ktor.client.plugins.logging.*
+import io.ktor.client.request.*
+import io.ktor.client.statement.*
+import io.ktor.http.*
+import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.application.*
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*
@@ -10,16 +20,71 @@ import io.ktor.server.routing.*
 import io.pl.telegram.BotController
 import io.pl.telegram.BotOrchestrator
 import kotlinx.coroutines.*
+import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import org.slf4j.event.Level
+import java.lang.invoke.MethodHandles
+import io.github.cdimascio.dotenv.dotenv
 
-private val logger = LoggerFactory.getLogger("MainApp")
+
+private val logger = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass())
 
 // Global bot scope
 private val botScope = CoroutineScope(Dispatchers.IO)
-private val botOrchestrator: BotController = BotOrchestrator(botScope)
+private val dotenv = Dotenv.load()
+private val botOrchestrator: BotController = BotOrchestrator(
+    dotenv["TELEGRAM_BOT_LLBUDDY_TOKEN"] ?: throw IllegalStateException("TELEGRAM_BOT_TOKEN is not set"),
+    botScope
+)
+
+// Global Ktor HttpClient instance
+private val httpClient = HttpClient {
+    install(ContentNegotiation) {
+        json(Json { ignoreUnknownKeys = true })
+    }
+    install(Logging) {
+        logger = Logger.DEFAULT
+        level = LogLevel.INFO
+    }
+    install(HttpTimeout) {
+        requestTimeoutMillis = 5000
+        connectTimeoutMillis = 5000
+        socketTimeoutMillis = 5000
+    }
+}
+
+suspend fun stopBotIfRunning() {
+    try {
+        val response: HttpResponse = httpClient.post("http://ll-buddy-production.up.railway.app/api/bot/stop") {
+            contentType(ContentType.Application.Json)
+        }
+        logger.info("Attempted to stop the bot. Response: ${response.status}")
+    } catch (e: Exception) {
+        logger.warn("Failed to stop the bot. It may not be running.", e)
+    }
+}
+
+suspend fun startBotOnShutdown() {
+    try {
+        val response: HttpResponse = httpClient.post("http://ll-buddy-production.up.railway.app/api/bot/start") {
+            contentType(ContentType.Application.Json)
+        }
+        logger.info("Attempted to restart the bot. Response: ${response.status}")
+    } catch (e: Exception) {
+        logger.warn("Failed to restart the bot on shutdown.", e)
+    }
+}
 
 fun main() = runBlocking {
+    // Ensure the bot stops before starting
+    stopBotIfRunning()
+
+    // Register shutdown hook to restart the bot when the process terminates
+    Runtime.getRuntime().addShutdownHook(Thread {
+        runBlocking {
+            startBotOnShutdown()
+        }
+    })
 
     botOrchestrator.startBot()
 
@@ -32,6 +97,9 @@ fun main() = runBlocking {
 
     logger.info("Ktor server started; waiting for jobs to complete...")
     serverJob.join()
+
+    // Clean up HttpClient when the application stops
+    httpClient.close()
 }
 
 fun Application.module() {
@@ -50,7 +118,7 @@ fun Application.module() {
                 call.respondText("Hello, $name! This is your test endpoint with Ktor!")
             }
 
-            //curl -X POST http://localhost:8080/api/bot/start
+            // curl -X POST http://localhost:8080/api/bot/start
             post("/bot/start") {
                 val started = botOrchestrator.startBot()
                 if (started) {
@@ -62,7 +130,7 @@ fun Application.module() {
                 }
             }
 
-            //curl -X POST http://localhost:8080/api/bot/stop
+            // curl -X POST http://localhost:8080/api/bot/stop
             post("/bot/stop") {
                 val stopped = botOrchestrator.stopBot()
                 if (stopped) {
